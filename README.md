@@ -24,7 +24,7 @@ It can:
 ### Clone the repository
 
 ```bash
-[git clone https://github.com/your-username/financial-agent.git](https://github.com/amirthabala/financial-agentic-chatbot.git)
+git clone -b master https://github.com/amirthabala/financial-agentic-chatbot.git
 cd financial-agentic-chatbot
 ```
 
