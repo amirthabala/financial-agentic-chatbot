@@ -1,0 +1,9 @@
+bs4
+gradio
+langchain
+python-dotenv
+langchain-groq
+langchain_chroma
+langchain_community
+langchain_huggingface
+sentence-transformers
