@@ -24,8 +24,8 @@ It can:
 ### Clone the repository
 
 ```bash
-git clone https://github.com/your-username/financial-agent.git
-cd financial-agent
+[git clone https://github.com/your-username/financial-agent.git](https://github.com/amirthabala/financial-agentic-chatbot.git)
+cd financial-agentic-chatbot
 ```
 
 ### Install dependencies
