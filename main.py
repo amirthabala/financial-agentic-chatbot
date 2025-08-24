@@ -1,7 +1,7 @@
 import os
 import gradio as gr
 from dotenv import dotenv_values
-from loader import load_documents
+from loader import load_documents_
 from langchain_chroma import Chroma
 from langchain_groq import ChatGroq
 from langchain.prompts.prompt import PromptTemplate
@@ -37,7 +37,7 @@ if os.path.exists(chroma_db_path):
         persist_directory="./chroma_store", embedding_function=embedding_model
     )
 else:
-    documents = load_documents("./documents")
+    documents = load_documents_("./documents")
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     chunked_docs = splitter.split_documents(documents)
@@ -53,16 +53,20 @@ else:
 def get_sub_queries_from_question(user_query):
     sub_query_template_prompt = """
     You are a helpful assistant that generates multiple sub-questions related to an input question.
-    You have access to 10k filings report for the companies - Google, Microsoft and Nvidia.
+    You have access to 10-K filings reports for Google, Microsoft, and NVIDIA.
 
     Goal:
-    - Break the input into the smallest possible independent sub-questions that can each be answered in isolation.
-    - If the question is already simple and atomic, return it as a single-element list.
-    - If the question compares multiple companies or metrics, create one sub-question per company/metric.
+    - Break the input into the smallest possible independent sub-questions.
+    - If the question requires a derived metric (like operating margin, growth %, ratios, or comparisons),
+      expand it into sub-queries for the underlying quantities needed to compute it.
+        * Example: "operating margin" → ["What was revenue in YEAR?", "What was operating income in YEAR?"]
+        * Example: "growth %" → ["What was revenue in YEAR1?", "What was revenue in YEAR2?"]
 
     Rules:
-    - Output ONLY a valid JSON list of strings.
+    - Always output ONLY a valid JSON list of strings.
     - Do NOT include explanations, numbering, or extra text.
+    - Each sub-query must be self-contained (include the company and year explicitly).
+    - If the input is already atomic, return it as a single-element JSON list.
 
     Input Question:
     {question}
@@ -74,8 +78,6 @@ def get_sub_queries_from_question(user_query):
 
     answer = groq_client.invoke(prompt).content
 
-    print(answer)
-
     return answer
 
 
@@ -85,14 +87,21 @@ def get_queries_answered(user_query):
 
     retrieved_context = "\n\n".join(
         [
-            f"{r_doc.metadata['section']}\n{r_doc.page_content}"
+            "\n".join(
+                [
+                    f"Page {r_doc.metadata.get('page_number', 'N/A')} | "
+                    f"Source: {r_doc.metadata.get('source', 'N/A')} | "
+                    f"Year: {r_doc.metadata.get('year', 'N/A')}\n"
+                    f"{r_doc.page_content}"
+                ]
+            )
             for r_doc in retrieved_docs
         ]
     )
 
     rag_template_prompt = """
     You are a financial analyst assistant.
-    Use the following SEC 10-K filing documents to answer the question comprehensively and accurately. 
+    Use the following SEC 10-K filing documents to answer the question comprehensively and accurately.
     If the answer is not explicity given, use your knowledge to retrive necessary context, do calculations and try achieving expected answer.
 
     Question: {input}
@@ -100,7 +109,7 @@ def get_queries_answered(user_query):
     Context:
     {context}
 
-    Answer in a clear, concise paragraph, along with citing section, company name and year.
+    Answer in a clear, concise paragraph, along with citing section, company name, page number and year.
     """
 
     prompt = PromptTemplate.from_template(rag_template_prompt).format(
@@ -112,10 +121,10 @@ def get_queries_answered(user_query):
 
 def handle_generic_questions(user_query):
     generic_template_prompt = """
-        If the question is a greeting, thank you, send-off, or unrelated to the financial data in these 10-K filings, 
+        If the question is a greeting, thank you, send-off, or unrelated to the financial data in these 10-K filings,
         Respond politely with a short message stating that it is out of your knowledge.
         If it's greeting, just greet/acknowledge appropriately.
-        
+
         Question: {input}
     """
 
@@ -125,6 +134,13 @@ def handle_generic_questions(user_query):
     answer = groq_client.invoke(prompt).content
 
     return answer.strip()
+
+
+def calculator(expression: str):
+    try:
+        return str(eval(expression))
+    except Exception as e:
+        return f"Error: {e}"
 
 
 # Define Tools
@@ -144,6 +160,11 @@ tools = [
         func=handle_generic_questions,
         description="Answers Generic questions like greetings, send offs and out of scope topics",
     ),
+    Tool(
+        name="Calculator",
+        func=calculator,
+        description="Useful for doing math operations (like growth %, differences, ratios) after retrieving numbers.",
+    ),
 ]
 
 print("Defined Tools")
@@ -161,14 +182,35 @@ IMPORTANT INSTRUCTIONS:
 - Provide reasoning and evidence for your answer.
 - Only give the final answer after gathering all needed observations.
 
+RULES FOR USING TOOLS:
+1. If the query is unrelated to financial data in 10-K filings:
+   - ONLY use the 'Handle Generic Questions' tool.
+   - Return the Observation from that tool as plain text.
+   - Do not continue with further thoughts or actions.
+   - Output format:
+       Final Answer: <plain text response>
 
+2. If the query is DIRECT (explicit, factual, single-company, single-year, no comparison or inference):
+   - Use 'Search from Documents' directly.
+   - Return the answer with citations.
+
+3. If the query is INDIRECT (comparisons, growth, percentages, trends, "how did it change", "is it higher", etc.):
+   - ALWAYS first use 'Get sub-queries from User Query' to expand the question.
+   - Answer each sub-query using 'Search from Documents'.
+   - If the sub-queries return quantities needed for a derived metric (e.g., revenue + operating income, two years of revenue, net income + shares), 
+     then:
+       a) Retrieve all required values from the filings,
+       b) Perform the calculation using the 'Calculator' tool,
+       c) Use the result to form the final answer.
+   - Combine results into a final synthesized answer with reasoning.
+   
 OUTPUT RULES:
-- If the query is unrelated to financial data in 10-K filings, ONLY use the 'Handle Generic Questions' tool.  
+- If the query is unrelated to financial data in 10-K filings, ONLY use the 'Handle Generic Questions' tool.
     - Return the Observation from that tool as plain text.
     - Do not continue with further thoughts or actions.
     - Output format:
         Final Answer: <plain text response>
-   
+
 - If the query is related to financial data:
     - If the query is complex or has mutliple data, use necessary tool to break it down and reason.
     - Use relevant tools ('Get sub-queries from User Query' or 'Search from Documents').
@@ -178,11 +220,12 @@ OUTPUT RULES:
             "answer": "Your Final Answer",
             "reasoning": "Your Decision",
             "sub_queries": List of sub queries if any,
-            "sources": List of all sources of subqueries in the below format 
+            "sources": List of all sources of subqueries in the below format.
                 {{
                     "company": "Which company data you are using",
                     "year": "Which year data you are retrieving",
-                    "excerpt": "Refernce to the doc retrieved"
+                    "page": "Which page data of the doc you have used to retrieve the answer",
+                    "excerpt": "Exact snippet which you have used to retrieve the answer"
                 }}
         }}
 - Never mix plain text and JSON in the same final output.
@@ -210,7 +253,7 @@ agent_executor = AgentExecutor(
     agent=agent,
     tools=tools,
     verbose=True,
-    max_iterations=5,
+    max_iterations=15,
     handle_parsing_errors=True,
 ).with_config({"run_name": "Agent"})
 
