@@ -61,3 +61,53 @@ def load_documents(folder_path):
         docs.extend(file_docs)
 
     return docs
+
+
+def split_documents_by_pageno(path, file_name):
+    with open(path, "r", encoding="utf-8") as f:
+        soup = BeautifulSoup(f, "lxml")  # use lxml for better parsing
+        for tag in soup(["script", "style"]):
+            tag.decompose()
+
+        file_year = file_name.split("-")[1][:4]
+        documents = []
+
+        # Split by <hr> directly
+        parts = str(soup).split("<hr")
+        for page_number, part in enumerate(parts, start=1):
+            page_soup = BeautifulSoup(part, "lxml")
+            text = page_soup.get_text().strip()
+            if not text:
+                continue
+            document = Document(
+                page_content=text,
+                metadata={
+                    "page_number": page_number,
+                    "source": file_name,
+                    "year": file_year,
+                },
+            )
+            documents.append(document)
+
+        return documents
+
+
+def load_documents_(folder_path):
+    files = os.listdir(folder_path)
+    docs = []
+
+    # Iterate through files in the folder
+    for file in files:
+        file_path = os.path.join(folder_path, file)
+
+        print(f"loading contents of file {file_path}....")
+        file_docs = split_documents_by_pageno(file_path, file)
+        doc = file_docs[3]
+        print(
+            f"Page {doc.metadata['page_number']} year {doc.metadata['year']} source {doc.metadata['source']} Content: {doc.page_content[:200]}..."
+        )
+        print(f"loaded --> {len(file_docs)} docs!")
+
+        docs.extend(file_docs)
+
+    return docs
